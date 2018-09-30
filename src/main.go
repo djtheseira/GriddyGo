@@ -38,7 +38,7 @@ type Result struct {
 // to the user
 type Response struct {
 	Msg     string   `json:"msg,omitempty"`
-	Results []Result `json:"results,omitempty"`
+	Results []Result `json:"results"`
 }
 
 // Create a struct to contain server fields
@@ -170,7 +170,8 @@ func handleGetData(w http.ResponseWriter, r *http.Request) {
 			row := s.db.QueryRow(query, hKey)
 			switch err := row.Scan(&key, &value, &createdate); err {
 			case sql.ErrNoRows:
-				fmt.Println("No rows returned!")
+				msg = ""
+				results = make([]Result, 0)
 			case nil:
 				results = []Result{Result{Key: key, Value: value, CreateDate: createdate.Format("2006-01-02")}}
 			default:
@@ -260,7 +261,7 @@ func handlePostData(w http.ResponseWriter, r *http.Request) {
 	}
 
 	Data = request.Value
-	json, _ := json.Marshal(&Response{Msg: msg})
+	json, _ := json.Marshal(&Response{Msg: msg, Results: []Result{}})
 	io.WriteString(w, string(json))
 }
 
@@ -321,7 +322,7 @@ func handleDeleteData(w http.ResponseWriter, r *http.Request) {
 
 	Data = ""
 
-	json, _ := json.Marshal(&Response{Msg: msg})
+	json, _ := json.Marshal(&Response{Msg: msg, Results: []Result{}})
 	io.WriteString(w, string(json))
 }
 
