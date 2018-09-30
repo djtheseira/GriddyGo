@@ -13,6 +13,9 @@ import (
 	"os/signal"
 	"path/filepath"
 	"syscall"
+	"time"
+
+	"github.com/lib/pq"
 
 	_ "github.com/lib/pq"
 )
@@ -20,13 +23,22 @@ import (
 // Request struct contains data that will be sent
 // by the user
 type Request struct {
+	Key   int    `json:"key"`
 	Value string `json:"value"`
+}
+
+// Result struct contains the results
+type Result struct {
+	Key        int    `json:"key"`
+	Value      string `json:"value"`
+	CreateDate string `json:"createdate"`
 }
 
 // Response struct contains data that will be returned
 // to the user
 type Response struct {
-	Msg string `json:"msg"`
+	Msg     string   `json:"msg,omitempty"`
+	Results []Result `json:"results,omitempty"`
 }
 
 // Create a struct to contain server fields
@@ -46,13 +58,13 @@ type configuration struct {
 
 // global server for everyone to access...probably bad idea?
 var s server
+var results []Result
+var badResponse = Response{Msg: "Something went wrong, try again later..."}
 
 // Data string to be returned when called by the API
 var Data string
 var serverport = "3000"
 var filename = "config/config.json"
-
-var badResponse = Response{Msg: "Something went wrong, try again later..."}
 
 func (config *configuration) CreateConfig() error {
 	filepath, _ := filepath.Abs(filename)
@@ -136,72 +148,181 @@ func homePage(w http.ResponseWriter, r *http.Request) {
 	io.WriteString(w, "DT Griddy Go Server")
 }
 
-// TODO
-// Modify this function to get a value from the db.
 // Function to handle getting data
-func handleGetData(w http.ResponseWriter) {
+func handleGetData(w http.ResponseWriter, r *http.Request) {
+	msg := ""
+	hKey := r.Header.Get("key")
+	isOk := 1
 	dbErr := s.db.Ping()
 	if dbErr != nil {
-		dbjson, _ := json.Marshal(badResponse)
-		io.WriteString(w, string(dbjson))
-		return
+		msg = "Server Error"
+		isOk = 0
 	}
-	if Data == "" {
-		Data = ""
+
+	// If header "key" is passed in, only get that value, otherwise, get all values
+	// .....safe
+	if isOk == 1 {
+		if len(hKey) > 0 {
+			query := `SELECT key, value, createdate FROM griddy.t2 WHERE key = $1;`
+			var key int
+			var value string
+			var createdate time.Time
+
+			row := s.db.QueryRow(query, hKey)
+			switch err := row.Scan(&key, &value, &createdate); err {
+			case sql.ErrNoRows:
+				fmt.Println("No rows returned!")
+			case nil:
+				results = []Result{Result{Key: key, Value: value, CreateDate: createdate.Format("2006-01-02")}}
+			default:
+				msg = "Error getting data"
+				log.Println("Error getting data", err)
+			}
+		} else {
+			query := `SELECT key, value, createdate FROM griddy.t2;`
+			countQuery := `SELECT COUNT(*) FROM griddy.t2;`
+			var count int
+			row := s.db.QueryRow(countQuery)
+			cErr := row.Scan(&count)
+			if cErr != nil {
+				log.Println("Error counting", cErr)
+			}
+			rows, err := s.db.Query(query)
+			if err != nil {
+				log.Println("Error setting data", err)
+			}
+			defer rows.Close()
+			results = make([]Result, count)
+			place := 0
+			for rows.Next() {
+				var key int
+				var value string
+				var createdate time.Time
+				err = rows.Scan(&key, &value, &createdate)
+				if err != nil {
+					msg = "Error getting data"
+					log.Println("Error setting data", err)
+				}
+				results[place] = Result{Key: key, Value: value, CreateDate: createdate.Format("2006-01-02")}
+				place++
+			}
+		}
 	}
-	response := &Response{Msg: Data}
-	rjson, err := json.Marshal(response)
-	if err != nil {
-		ejson, _ := json.Marshal(badResponse)
-		io.WriteString(w, string(ejson))
-		log.Println("json marshal error", err)
-	} else {
-		io.WriteString(w, string(rjson))
-	}
+
+	response := &Response{Results: results, Msg: msg}
+	json, _ := json.Marshal(response)
+	io.WriteString(w, string(json))
 }
 
-// TODO
-// Modify this function to write a value to the db.
 // Function to handle posting data
 func handlePostData(w http.ResponseWriter, r *http.Request) {
+	msg := ""
+	isOk := 1
 	dbErr := s.db.Ping()
 	if dbErr != nil {
-		dbjson, _ := json.Marshal(badResponse)
-		io.WriteString(w, string(dbjson))
-		return
+		msg = "Server Error"
+		isOk = 0
 	}
 
 	body, err := ioutil.ReadAll(r.Body)
 	if err != nil {
 		log.Println("Error reading request body", err)
-		return
+		msg += "Server Error"
+		isOk = 0
 	}
 
 	var request Request
 	err = json.Unmarshal(body, &request)
 	if err != nil {
-		json, _ := json.Marshal(badResponse)
-		io.WriteString(w, string(json))
+		msg += "Error parsing the request, please try again"
 		log.Println("json unmarshal error", err)
-		return
+		isOk = 0
 	}
+
+	if len(request.Value) > 0 && isOk == 1 {
+		query := `INSERT INTO griddy.t2(value) VALUES($1) RETURNING key`
+		key := 0
+		err = s.db.QueryRow(query, request.Value).Scan(&key)
+		if err != nil {
+			if pgerr, ok := err.(*pq.Error); ok {
+				if pgerr.Code == "23505" {
+					msg = "That value is already taken in the database, " +
+						"please insert a unique value."
+				}
+			} else {
+				msg = "Error inserting into db"
+			}
+			log.Println("Error inserting into db", err)
+		} else {
+			msg = fmt.Sprint("Successfully added data with Key of: ", key)
+		}
+	} else if isOk != 0 {
+		msg = "No value to insert into the Database, please pass a value in."
+	}
+
 	Data = request.Value
-	json, _ := json.Marshal(&Response{Msg: "Successfully added data"})
+	json, _ := json.Marshal(&Response{Msg: msg})
 	io.WriteString(w, string(json))
 }
 
-// TODO
-// Modify this function to delete a value from the db.
 // Function to handle deleting data
-func handleDeleteData(w http.ResponseWriter) {
+func handleDeleteData(w http.ResponseWriter, r *http.Request) {
+	msg := ""
+	isOk := 1
 	dbErr := s.db.Ping()
 	if dbErr != nil {
-		dbjson, _ := json.Marshal(badResponse)
-		io.WriteString(w, string(dbjson))
-		return
+		msg = "Server Error"
+		isOk = 0
 	}
+
+	body, err := ioutil.ReadAll(r.Body)
+	if err != nil {
+		log.Println("Error reading request body", err)
+		if len(msg) > 0 {
+			msg += "\n"
+		}
+		msg += "Server Error"
+		isOk = 0
+	}
+
+	var request Request
+	err = json.Unmarshal(body, &request)
+	if err != nil {
+		if len(msg) > 0 {
+			msg += "\n"
+		}
+		msg += "Error parsing the request, please try again"
+		log.Println("json unmarshal error", err)
+	}
+
+	if request.Key > 0 && isOk == 1 {
+		countQuery := `SELECT COUNT(*) FROM griddy.t2 WHERE key = $1;`
+		var count int
+		row := s.db.QueryRow(countQuery, request.Key)
+		cErr := row.Scan(&count)
+		if cErr != nil {
+			log.Println("Error counting", cErr)
+		}
+		if count == 0 {
+			msg = fmt.Sprintf("There is no key that matches %d.", request.Key)
+		} else {
+			query := `DELETE FROM griddy.t2 WHERE key = $1;`
+			_, err = s.db.Exec(query, request.Key)
+
+			if err != nil {
+				msg = "Error deleting from db"
+				log.Println("Error deleting value from database", err)
+			} else {
+				msg = "Key deleted successfully"
+			}
+		}
+	} else if isOk != 0 {
+		msg = "No key given to delete from database, please pass in a key to delete."
+	}
+
 	Data = ""
-	json, _ := json.Marshal(&Response{Msg: "Data Deleted Successfully"})
+
+	json, _ := json.Marshal(&Response{Msg: msg})
 	io.WriteString(w, string(json))
 }
 
@@ -212,15 +333,15 @@ func handleDataRequest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	r.Header.Set("Content-Type", "application/json")
+	w.Header().Set("Content-Type", "application/json")
 
 	switch r.Method {
 	case "GET":
-		handleGetData(w)
+		handleGetData(w, r)
 	case "POST":
 		handlePostData(w, r)
 	case "DELETE":
-		handleDeleteData(w)
+		handleDeleteData(w, r)
 	default:
 		fmt.Fprintf(w, "Sorry, only DELETE, GET, and POST methods are supported.")
 	}
