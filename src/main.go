@@ -50,7 +50,7 @@ var s server
 // Data string to be returned when called by the API
 var Data string
 var serverport = "3000"
-var filename = "src/config/config.json"
+var filename = "config/config.json"
 
 var badResponse = Response{Msg: "Something went wrong, try again later..."}
 
