@@ -116,7 +116,6 @@ func shutdown() error {
 // Function to create the connection to the db with
 // provided connection string
 func createDBConnection(psqlInfo string) error {
-	fmt.Printf("info %s", psqlInfo)
 	tempDb, err := sql.Open("postgres", psqlInfo)
 	if err != nil {
 		fmt.Println("error opening db connection", err)
