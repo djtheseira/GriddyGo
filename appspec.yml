@@ -2,7 +2,7 @@ version: 0.0
 os: linux 
 files:
   - source: /src
-    destination: /opt
+    destination: /home/ec2-user/projects
 hooks:
   BeforeInstall:
     - location: codedeploy/BeforeInstall.sh
