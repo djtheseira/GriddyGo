@@ -13,3 +13,8 @@
 
 # Ignore vscode settings
 /.vscode
+
+/pkg
+
+# Ignore config files
+config.json

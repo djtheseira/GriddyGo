@@ -1,5 +1,3 @@
-cmd-k v
-
 # GriddyGo
 
 ## Task
