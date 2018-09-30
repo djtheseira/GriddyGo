@@ -37,8 +37,12 @@ type Result struct {
 // Response struct contains data that will be returned
 // to the user
 type Response struct {
-	Msg     string   `json:"msg,omitempty"`
 	Results []Result `json:"results"`
+}
+
+// MessageResponse struct contains data that returns status message
+type MessageResponse struct {
+	Msg string `json:"msg,omitempty"`
 }
 
 // Create a struct to contain server fields
@@ -59,10 +63,7 @@ type configuration struct {
 // global server for everyone to access...probably bad idea?
 var s server
 var results []Result
-var badResponse = Response{Msg: "Something went wrong, try again later..."}
 
-// Data string to be returned when called by the API
-var Data string
 var serverport = "3000"
 var filename = "config/config.json"
 
@@ -209,9 +210,16 @@ func handleGetData(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	response := &Response{Results: results, Msg: msg}
-	json, _ := json.Marshal(response)
-	io.WriteString(w, string(json))
+	var gJSON []byte
+
+	if len(msg) > 0 {
+		response := &MessageResponse{Msg: msg}
+		gJSON, _ = json.Marshal(response)
+	} else {
+		response := &Response{Results: results}
+		gJSON, _ = json.Marshal(response)
+	}
+	io.WriteString(w, string(gJSON))
 }
 
 // Function to handle posting data
@@ -260,8 +268,8 @@ func handlePostData(w http.ResponseWriter, r *http.Request) {
 		msg = "No value to insert into the Database, please pass a value in."
 	}
 
-	Data = request.Value
-	json, _ := json.Marshal(&Response{Msg: msg, Results: []Result{}})
+	response := &MessageResponse{Msg: msg}
+	json, _ := json.Marshal(response)
 	io.WriteString(w, string(json))
 }
 
@@ -320,9 +328,8 @@ func handleDeleteData(w http.ResponseWriter, r *http.Request) {
 		msg = "No key given to delete from database, please pass in a key to delete."
 	}
 
-	Data = ""
-
-	json, _ := json.Marshal(&Response{Msg: msg, Results: []Result{}})
+	response := &MessageResponse{Msg: msg}
+	json, _ := json.Marshal(response)
 	io.WriteString(w, string(json))
 }
 
