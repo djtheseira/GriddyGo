@@ -11,7 +11,6 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
@@ -75,11 +74,12 @@ var s server
 var results []Result
 
 var serverport = "3000"
-var filename = "config/config.json"
+var filename = "/config/config.json"
 
 func (config *configuration) CreateConfig() error {
-	filepath, _ := filepath.Abs(filename)
-	file, err := os.Open(filepath)
+	// filepath, _ := filepath.Abs(filename)
+	dir, _ := os.Getwd()
+	file, err := os.Open(dir + filename)
 	if err != nil {
 		fmt.Println("Error creating config", err)
 		return err
@@ -98,6 +98,7 @@ func listenAndServe() error {
 	listener, err := net.Listen("tcp", s.httpServer.Addr)
 	// If any errors occur, end and return the error for analysis
 	if err != nil {
+		fmt.Println("Listen error", err)
 		return err
 	}
 
@@ -142,14 +143,6 @@ func createDBConnection(psqlInfo string) error {
 		return err
 	}
 	fmt.Println("DB Connection Successful")
-	return nil
-}
-
-func closeDBConnection() error {
-	if s.db != nil {
-		s.db.Close()
-		fmt.Println("Close DB Connection Successful")
-	}
 	return nil
 }
 
@@ -450,7 +443,6 @@ func newServer(port string) server {
 
 // Main function that runs the show
 func main() {
-
 	// Channel to receive unix signals
 	sigs := make(chan os.Signal, 1)
 
@@ -474,9 +466,6 @@ func main() {
 	config := &configuration{}
 	// Get the config setup
 	err = config.CreateConfig()
-	if err != nil {
-		done <- true
-	}
 
 	// Create the psql connection string
 	psqlInfo := fmt.Sprintf("host=%s port=%d user=%s "+
@@ -493,8 +482,6 @@ func main() {
 		sig := <-sigs
 		fmt.Println()
 		fmt.Printf("Signal: %s\n", sig)
-		// Graceful shutdown
-		closeDBConnection()
 		shutdown()
 		done <- true
 	}()
