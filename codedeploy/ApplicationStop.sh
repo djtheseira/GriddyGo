@@ -1,2 +1,1 @@
-killall app
-exit 0
+sudo killall --signal SIGINT griddy

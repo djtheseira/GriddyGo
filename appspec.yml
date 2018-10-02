@@ -2,7 +2,7 @@ version: 0.0
 os: linux 
 files:
   - source: /src
-    destination: /home/ec2-user/projects/griddy/src
+    destination: /home/ec2-user/projects/src/griddy
 hooks:
   BeforeInstall:
     - location: codedeploy/BeforeInstall.sh
