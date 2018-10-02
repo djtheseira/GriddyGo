@@ -18,14 +18,13 @@ import (
 	"time"
 
 	"github.com/lib/pq"
-
-	_ "github.com/lib/pq"
 )
 
 // Request struct contains data that will be sent
 // by the user
 type Request struct {
 	Key   int    `json:"key"`
+	T2Key int    `json:"t2key"`
 	T1Key int    `json:"t1key"`
 	Value string `json:"value"`
 }
@@ -187,6 +186,10 @@ func handleGetData(w http.ResponseWriter, r *http.Request) {
 	msg := ""
 	hKey := r.Header.Get("key")
 	isOk := 1
+	if len(hKey) == 0 {
+		queryValues := r.URL.Query()
+		hKey = queryValues.Get("key")
+	}
 	dbErr := s.db.Ping()
 	if dbErr != nil {
 		msg = "Server Error"
@@ -375,12 +378,12 @@ func handleDeleteData(w http.ResponseWriter, r *http.Request) {
 		log.Println("json unmarshal error", err)
 	}
 
-	if (request.Key > 0 || request.T1Key > 0) && isOk == 1 {
+	if (request.Key > 0 || request.T2Key > 0) && isOk == 1 {
 		table := "T1"
 		key := request.Key
-		if request.Key == 0 && request.T1Key > 0 {
+		if request.Key == 0 && request.T2Key > 0 {
 			table = "T2"
-			key = request.T1Key
+			key = request.T2Key
 		}
 		countQuery := fmt.Sprintf(`SELECT COUNT(*) FROM griddy.%s WHERE key = $1;`, table)
 		var count int
@@ -440,6 +443,7 @@ func newServer(port string) server {
 
 	mux.HandleFunc("/", homePage)
 	mux.HandleFunc("/data", handleDataRequest)
+	mux.HandleFunc("/data/:id", handleGetData)
 	httpServer := &http.Server{Addr: ":" + port, Handler: mux}
 	return server{httpServer: httpServer}
 }
