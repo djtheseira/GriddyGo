@@ -1,3 +1,3 @@
 #!/bin/bash
-go build projects/src/griddy/main.go
-projects/src/griddy/griddy
+go build /projects/src/griddy/main.go
+/projects/src/griddy/griddy
