@@ -1,4 +1,4 @@
 #!/bin/bash
 
 echo $PWD
-./killscript.sh
+./home/ec2-user/killscript.sh
