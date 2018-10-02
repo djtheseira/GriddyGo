@@ -12,6 +12,8 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -24,11 +26,20 @@ import (
 // by the user
 type Request struct {
 	Key   int    `json:"key"`
+	T1Key int    `json:"t1key"`
 	Value string `json:"value"`
 }
 
 // Result struct contains the results
 type Result struct {
+	Key       int        `json:"key"`
+	Value     string     `json:"value"`
+	T2Results []T2Result `json:"children"`
+}
+
+// T2Result struct contains the results connected
+// to the T1 Key
+type T2Result struct {
 	Key        int    `json:"key"`
 	Value      string `json:"value"`
 	CreateDate string `json:"createdate"`
@@ -143,6 +154,29 @@ func closeDBConnection() error {
 	return nil
 }
 
+func createT2Results(t2String string) []T2Result {
+	t2Array := strings.Split(t2String, "&&")
+	t2Results := []T2Result{}
+	if len(t2Array) > 0 && len(t2Array[0]) > 0 {
+		t2Results = make([]T2Result, len(t2Array))
+		for i := range t2Array {
+			t2RowSplit := strings.Split(t2Array[i], ",")
+			key, iErr := strconv.Atoi(t2RowSplit[0])
+			if iErr != nil {
+				continue
+			}
+			createdate, tErr := time.Parse("2006-01-02 15:04:05.000000", t2RowSplit[2])
+			if tErr != nil {
+				log.Println("Error with date parse", tErr)
+				continue
+			}
+
+			t2Results[i] = T2Result{Key: key, Value: t2RowSplit[1], CreateDate: createdate.Format("2006-01-02")}
+		}
+	}
+	return t2Results
+}
+
 // Function for display a home page message
 func homePage(w http.ResponseWriter, r *http.Request) {
 	io.WriteString(w, "DT Griddy Go Server")
@@ -163,25 +197,34 @@ func handleGetData(w http.ResponseWriter, r *http.Request) {
 	// .....safe
 	if isOk == 1 {
 		if len(hKey) > 0 {
-			query := `SELECT key, value, createdate FROM griddy.t2 WHERE key = $1;`
-			var key int
-			var value string
-			var createdate time.Time
+			query := `SELECT t1.key AS T1Key, t1.value AS T1Value, 
+					COALESCE(string_agg(t2.key || ',' || t2.value || ',' || createdate, '&&'), '')
+				FROM griddy.t1
+				LEFT JOIN griddy.t2 ON (t2.t1key = t1.key)
+				WHERE t1.key = $1
+				GROUP BY t1.key, t1.value;`
+			var t1Key int
+			var t1Value string
+			var t2String string
 
 			row := s.db.QueryRow(query, hKey)
-			switch err := row.Scan(&key, &value, &createdate); err {
+			switch err := row.Scan(&t1Key, &t1Value, &t2String); err {
 			case sql.ErrNoRows:
 				msg = ""
 				results = make([]Result, 0)
 			case nil:
-				results = []Result{Result{Key: key, Value: value, CreateDate: createdate.Format("2006-01-02")}}
+				results = []Result{Result{Key: t1Key, Value: t1Value, T2Results: createT2Results(t2String)}}
 			default:
 				msg = "Error getting data"
 				log.Println("Error getting data", err)
 			}
 		} else {
-			query := `SELECT key, value, createdate FROM griddy.t2;`
-			countQuery := `SELECT COUNT(*) FROM griddy.t2;`
+			query := `SELECT t1.key AS T1Key, t1.value AS T1Value, 
+					COALESCE(string_agg(t2.key || ',' || t2.value || ',' || createdate, '&&'), '')
+				FROM griddy.t1
+				LEFT JOIN griddy.t2 ON (t2.t1key = t1.key)
+				GROUP BY t1.key, t1.value;`
+			countQuery := `SELECT COUNT(*) FROM griddy.t1;`
 			var count int
 			row := s.db.QueryRow(countQuery)
 			cErr := row.Scan(&count)
@@ -196,15 +239,15 @@ func handleGetData(w http.ResponseWriter, r *http.Request) {
 			results = make([]Result, count)
 			place := 0
 			for rows.Next() {
-				var key int
-				var value string
-				var createdate time.Time
-				err = rows.Scan(&key, &value, &createdate)
+				var t1Key int
+				var t1Value string
+				var t2String string
+				err = rows.Scan(&t1Key, &t1Value, &t2String)
 				if err != nil {
 					msg = "Error getting data"
 					log.Println("Error setting data", err)
 				}
-				results[place] = Result{Key: key, Value: value, CreateDate: createdate.Format("2006-01-02")}
+				results[place] = Result{Key: t1Key, Value: t1Value, T2Results: createT2Results(t2String)}
 				place++
 			}
 		}
@@ -248,21 +291,46 @@ func handlePostData(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if len(request.Value) > 0 && isOk == 1 {
-		query := `INSERT INTO griddy.t2(value) VALUES($1) RETURNING key`
-		key := 0
-		err = s.db.QueryRow(query, request.Value).Scan(&key)
-		if err != nil {
-			if pgerr, ok := err.(*pq.Error); ok {
-				if pgerr.Code == "23505" {
-					msg = "That value is already taken in the database, " +
-						"please insert a unique value."
-				}
-			} else {
-				msg = "Error inserting into db"
+		table := "T1"
+		query := `INSERT INTO griddy.t1(value) VALUES($1) RETURNING key, value;`
+		if request.T1Key > 0 {
+			countQuery := `SELECT COUNT(*) FROM griddy.t1 WHERE key = $1`
+			var count int
+			row := s.db.QueryRow(countQuery, request.T1Key)
+			err = row.Scan(&count)
+			if err != nil {
+				log.Println("Error counting", err)
 			}
-			log.Println("Error inserting into db", err)
-		} else {
-			msg = fmt.Sprint("Successfully added data with Key of: ", key)
+			if count > 0 {
+				query = `INSERT INTO griddy.t2(t1key, value) VALUES($1,$2) RETURNING key, value;`
+			} else {
+				msg = fmt.Sprintf("No row exists with the key: %d.", request.T1Key)
+				isOk = 0
+			}
+			table = "T2"
+		}
+		if isOk == 1 {
+			key := 0
+			value := ""
+			if request.T1Key > 0 {
+				err = s.db.QueryRow(query, request.T1Key, request.Value).Scan(&key, &value)
+			} else {
+				err = s.db.QueryRow(query, request.Value).Scan(&key, &value)
+			}
+
+			if err != nil {
+				if pgerr, ok := err.(*pq.Error); ok {
+					if pgerr.Code == "23505" {
+						msg = "That value is already taken in the database, " +
+							"please insert a unique value."
+					}
+				} else {
+					msg = "Error inserting into db"
+				}
+				log.Println("Error inserting into db", err)
+			} else {
+				msg = fmt.Sprintf("Successfully added '%s' with Key of: %d into %s", value, key, table)
+			}
 		}
 	} else if isOk != 0 {
 		msg = "No value to insert into the Database, please pass a value in."
@@ -299,33 +367,45 @@ func handleDeleteData(w http.ResponseWriter, r *http.Request) {
 		if len(msg) > 0 {
 			msg += "\n"
 		}
-		msg += "Error parsing the request, please try again"
+		if err.Error() == "json: cannot unmarshal string into Go struct field Request.key of type int" {
+			msg += "Error with your request: The key is of an invalid type."
+		} else {
+			msg += "Error parsing the request, please try again"
+		}
 		log.Println("json unmarshal error", err)
 	}
 
-	if request.Key > 0 && isOk == 1 {
-		countQuery := `SELECT COUNT(*) FROM griddy.t2 WHERE key = $1;`
+	if (request.Key > 0 || request.T1Key > 0) && isOk == 1 {
+		table := "T1"
+		key := request.Key
+		if request.Key == 0 && request.T1Key > 0 {
+			table = "T2"
+			key = request.T1Key
+		}
+		countQuery := fmt.Sprintf(`SELECT COUNT(*) FROM griddy.%s WHERE key = $1;`, table)
 		var count int
-		row := s.db.QueryRow(countQuery, request.Key)
+		row := s.db.QueryRow(countQuery, key)
 		cErr := row.Scan(&count)
 		if cErr != nil {
 			log.Println("Error counting", cErr)
 		}
 		if count == 0 {
-			msg = fmt.Sprintf("There is no key that matches %d.", request.Key)
+			msg = fmt.Sprintf("There is no key that matches %d in table %s", key, table)
 		} else {
-			query := `DELETE FROM griddy.t2 WHERE key = $1;`
-			_, err = s.db.Exec(query, request.Key)
+			query := fmt.Sprintf(`DELETE FROM griddy.%s WHERE key = $1;`, table)
+			_, err = s.db.Exec(query, key)
 
 			if err != nil {
 				msg = "Error deleting from db"
 				log.Println("Error deleting value from database", err)
 			} else {
-				msg = "Key deleted successfully"
+				msg = fmt.Sprintf("Key deleted successfully from table %s", table)
 			}
 		}
 	} else if isOk != 0 {
-		msg = "No key given to delete from database, please pass in a key to delete."
+		if len(msg) == 0 {
+			msg = "No key given to delete from database, please pass in a key to delete."
+		}
 	}
 
 	response := &MessageResponse{Msg: msg}
